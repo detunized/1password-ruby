@@ -51,6 +51,10 @@ module Util
     def self.bytes_to_str bytes
         bytes.pack "c*"
     end
+
+    def self.str_to_hex str
+        str.unpack("H*")[0]
+    end
 end
 
 module Crypto
@@ -269,8 +273,44 @@ class OnePass
 end
 
 #
+# poor man's tests
+#
+
+def assert condition
+    line = caller[0][/:(\d+):/, 1].to_i
+    code = IO.readlines(__FILE__)[line - 1]
+    puts "Test failed: #{caller[0]}\n> #{code}" if !condition
+end
+
+def test_encrypt
+    op = OnePass.new
+    op.instance_variable_set :@key, "key key key key key key key key!"
+    ciphertext = op.encrypt "plaintext", "iv iv iv iv!"
+
+    assert Util.str_to_hex(ciphertext) ==
+        "94ae5caa13ff087e455691d8e5d38ee438e01116fde4341228"
+end
+
+def test_all
+    config = YAML::load_file "config.yaml"
+    op = OnePass.new
+    op.login username: config["username"],
+             password: config["password"],
+             account_key: config["account_key"],
+             uuid: config["uuid"]
+
+    assert Util.str_to_hex(op.instance_variable_get(:@key)) ==
+        "d376bc3fdabc77d22ee987689a365c1ad58566829690effa1c1933c585c505df"
+end
+
+#
 # main
 #
+
+# Run tests
+private_methods.grep(/^test_/).each do |m|
+    send m
+end
 
 config = YAML::load_file "config.yaml"
 op = OnePass.new
