@@ -1,0 +1,19 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    hkdf (0.2.0)
+    httparty (0.14.0)
+      multi_xml (>= 0.5.2)
+    multi_xml (0.5.5)
+    pbkdf256 (0.1.3)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  hkdf
+  httparty
+  pbkdf256
+
+BUNDLED WITH
+   1.12.5
