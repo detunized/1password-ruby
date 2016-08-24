@@ -38,6 +38,10 @@ module Util
         OpenSSL::BN.new str, 2
     end
 
+    def self.str_to_base64 str
+        Base64.urlsafe_encode64(str).sub(/\=*$/, "")
+    end
+
     def self.base64_to_str base64_or_base64url
         Base64.urlsafe_decode64 base64_to_base64url base64_or_base64url
     end
@@ -45,7 +49,7 @@ module Util
     def self.base64_to_base64url base64
         base64
             .tr("+/", "-_")
-            .sub(/\=+$/, "")
+            .sub(/\=*$/, "")
     end
 
     def self.bytes_to_str bytes
@@ -213,6 +217,7 @@ class OnePass
                            account_key: account_key,
                            session: @session,
                            http: self
+        verify_key
     end
 
     def get_user_info email, uuid
@@ -232,6 +237,37 @@ class OnePass
         }
         # ====
     }
+    end
+
+    def verify_key
+        payload = JSON.dump({"sessionID" => @session.id})
+        encrypted_payload = encrypt_payload payload, "\0" * 12 # TODO: Generate random
+        post "auth/verify", encrypted_payload
+    end
+
+    def encrypt_payload plaintext, iv
+        ciphertext = encrypt plaintext, iv
+        ciphertext_base64 = Util.str_to_base64 ciphertext
+        iv_base64 = Util.str_to_base64 iv
+
+        {
+            "cty" => "b5+jwk+json",
+            "data" => ciphertext_base64,
+            "enc" => "A256GCM",
+            "iv" => iv_base64,
+            "kid" => @session.id
+        }
+    end
+
+    def decrypt_payload payload
+        raise "Unsupported container type '#{cty}'" if (cty = payload["cty"]) != "b5+jwk+json"
+        raise "Unsupported encryption '#{enc}'" if (enc = payload["enc"]) != "A256GCM"
+        raise "Session ID does not match" if payload["kid"] != @session.id
+
+        ciphertext = Util.base64_to_str payload["data"]
+        iv = Util.base64_to_str payload["iv"]
+
+        decrypt ciphertext, iv
     end
 
     # Notes on the encryption
