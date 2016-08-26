@@ -7,6 +7,7 @@ require "base64"
 require "json"
 require "yaml"
 require "uri"
+require "ap" # TODO: Remove from release
 
 HOST = "https://my.1password.com/api/v1"
 

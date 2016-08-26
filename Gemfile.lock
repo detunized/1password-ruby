@@ -1,6 +1,7 @@
 GEM
   remote: https://rubygems.org/
   specs:
+    awesome_print (1.7.0)
     hkdf (0.2.0)
     httparty (0.14.0)
       multi_xml (>= 0.5.2)
@@ -11,6 +12,7 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
+  awesome_print
   hkdf
   httparty
   pbkdf256
