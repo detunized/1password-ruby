@@ -25,18 +25,22 @@ class Http
             http_proxyport: 8080,
             verify: false
         }
+
+        @post_headers = {
+            "Content-Type" => "application/json"
+        }
     end
 
-    def get url
-        self.class.get url, @options
+    def get url, headers = {}
+        self.class.get url, @options.merge({
+            headers: headers
+        })
     end
 
-    def post url, args
+    def post url, args, headers = {}
         self.class.post url, @options.merge({
             body: args.to_json,
-            headers: {
-                "Content-Type" => "application/json"
-            }
+            headers: @post_headers.merge(headers)
         })
     end
 end
@@ -177,15 +181,6 @@ class Srp
         }
 
         response = @http.post ["auth"], args
-
-        # ==== baked response (for now)
-        response = {
-            "encConfig" => nil,
-            "sessionID" => "W7FLK6HU5BC7XP7PCHVLGTRSGE",
-            "userB" => "b715a789a7d591fbde439abbc8ea3095cb87c3312ee450d491c46ecb43a58fb95a92402dcce2eeb0fe0cf2f3a007abb76aa343f51cd7550d96799fa9078dff185a444afe73ce90797c3c4a2b9f6f822a1ae64bdd6dabfb2b450a21c6c2d414bae35ebb3d02a6930c81d98d16255ba12db24904650d22e0c8b70b6382a96899a86e07eab970c5857919d81679556b4104045c33c0b116acb06181f0710f416bfd554e38aff7b723c9e4203b63a3945c7d1cd7fd736da5c8e9171e692e60492fcbf789441d2b6a5162740bcd1caa5ecd368c145db8d5ff451222d92d2bf74a77d92be69f2768047a6b4fff475a19529292c36d05d43fda71a5cafae1719b4b36e9c81830f8fa3dbe6fe61376f1332a28526aaceaa0196641ec9b96a734a78dfc4d2402d3729963c693390e9ea18a17bc51ef64e70cf10a1c1bcfda1f8f53d687cffffb7367b348c1b66f138266c835c90f1484e22d25f0b611d45f5599518589217de022e032c5af8567a14ac31da4b44fea07043042abae4e5a503e1731c219b08aee3d372b29164fd8adb8cac8770022732ffd58c604803fdd95a61e1f01a68fabf73a0b5b9aeb91e9cac867b9723649b99c47242c56c7e23da3a2291b3bfc102b252f83479c90fa04d41aae9b8adc6ef845fb1e5e004f01d436f9d3471cc17c3b038edff2a2ac1d1b06797bcbb186446a78c9ec49ef6469f34ec71f73c8f1ff"
-        }
-        # ====
-
         raise "Invalid response" if response["sessionID"] != @session.id
 
         @shared_b = Util.bn_from_hex response["userB"]
@@ -254,27 +249,16 @@ class OnePass
 
     def get_user_info email, uuid
         get ["auth", email, uuid, "-"]
-
-        # ==== baked response (for now)
-        {
-            "accountKeyFormat" => "A3",
-            "accountKeyUuid" => "FRN8GF",
-            "sessionID" => "W7FLK6HU5BC7XP7PCHVLGTRSGE",
-            "status" => "ok",
-            "userAuth" => {
-                "alg" => "PBES2g-HS256",
-                "iterations" => 100000,
-                "method" => "SRPg-4096",
-                "salt" => "-JLqTVQLjQg08LWZ0gyuUA"
-        }
-        # ====
-    }
     end
 
     def verify_key
         payload = JSON.dump({"sessionID" => @session.id})
         encrypted_payload = encrypt_payload payload, "\0" * 12 # TODO: Generate random
-        post ["auth", "verify"], encrypted_payload
+        headers = {
+            "X-AgileBits-Session-ID" => @session.id, # TODO: Move this to get/post
+            "X-AgileBits-MAC" => "" # TODO: Compute this
+        }
+        post ["auth", "verify"], encrypted_payload, headers
     end
 
     def encrypt_payload plaintext, iv
@@ -282,12 +266,15 @@ class OnePass
         ciphertext_base64 = Util.str_to_base64 ciphertext
         iv_base64 = Util.str_to_base64 iv
 
+        # The order is important as it matches one in Js. Otherwise mitmproxy doesn't
+        # recognize the request. Like this it's possible to replay against the flow
+        # recorded with the webpage.
         {
-            "cty" => CONTAINER_TYPE,
-            "data" => ciphertext_base64,
+            "kid" => @session.id,
             "enc" => ENCRYPTION_MODE,
+            "cty" => CONTAINER_TYPE,
             "iv" => iv_base64,
-            "kid" => @session.id
+            "data" => ciphertext_base64,
         }
     end
 
@@ -331,14 +318,14 @@ class OnePass
     # Http interface
     #
 
-    def get url_components
+    def get url_components, headers = {}
         url = Util.url_escape_join url_components
         @http.get "https://#{@host}/api/v1/#{url}"
     end
 
-    def post url_components, args
+    def post url_components, args, headers = {}
         url = Util.url_escape_join url_components
-        @http.post "https://#{@host}/api/v1/#{url}", args
+        @http.post "https://#{@host}/api/v1/#{url}", args, headers
     end
 end
 
@@ -381,10 +368,3 @@ end
 private_methods.grep(/^test_/).each do |m|
     send m
 end
-
-config = YAML::load_file "config.yaml"
-op = OnePass.new
-p op.login username: config["username"],
-           password: config["password"],
-           account_key: config["account_key"],
-           uuid: config["uuid"]
