@@ -251,10 +251,12 @@ class OnePass
         get ["auth", email, uuid, "-"]
     end
 
+    # TODO: Rename this, the name doesn't make sense
     def verify_key
         payload = JSON.dump({"sessionID" => @session.id})
         encrypted_payload = encrypt_payload payload, "\0" * 12 # TODO: Generate random
-        post ["auth", "verify"], encrypted_payload
+        response = post ["auth", "verify"], encrypted_payload
+        JSON.load decrypt_payload response
     end
 
     def encrypt_payload plaintext, iv
