@@ -254,11 +254,7 @@ class OnePass
     def verify_key
         payload = JSON.dump({"sessionID" => @session.id})
         encrypted_payload = encrypt_payload payload, "\0" * 12 # TODO: Generate random
-        headers = {
-            "X-AgileBits-Session-ID" => @session.id, # TODO: Move this to get/post
-            "X-AgileBits-MAC" => "" # TODO: Compute this
-        }
-        post ["auth", "verify"], encrypted_payload, headers
+        post ["auth", "verify"], encrypted_payload
     end
 
     def encrypt_payload plaintext, iv
@@ -318,14 +314,25 @@ class OnePass
     # Http interface
     #
 
-    def get url_components, headers = {}
+    def get url_components
         url = Util.url_escape_join url_components
-        @http.get "https://#{@host}/api/v1/#{url}"
+        @http.get "https://#{@host}/api/v1/#{url}", request_headers
     end
 
-    def post url_components, args, headers = {}
+    def post url_components, args
         url = Util.url_escape_join url_components
-        @http.post "https://#{@host}/api/v1/#{url}", args, headers
+        @http.post "https://#{@host}/api/v1/#{url}", args, request_headers
+    end
+
+    def request_headers
+        if @session
+            {
+                "X-AgileBits-Session-ID" => @session.id,
+                "X-AgileBits-MAC" => "" # TODO: Compute this
+            }
+        else
+            {}
+        end
     end
 end
 
