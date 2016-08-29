@@ -93,6 +93,10 @@ module Util
     def self.url_escape_join components
         components.map { |i| url_escape i }.join "/"
     end
+
+    def self.normalize_utf8 str
+        str.unicode_normalize :nfkd
+    end
 end
 
 module Crypto
@@ -141,7 +145,18 @@ class Session
     end
 end
 
+class Credentials
+    attr_reader :username, :password, :account_key
+
+    def initialize username:, password:, account_key:
+        @username = username
+        @password = password
+        @account_key = account_key
+    end
+end
+
 class Srp
+    # TODO: Use Credentials here
     def self.perform username:, password:, account_key:, session:, http:
         srp = new username: username,
                   password: password,
@@ -238,6 +253,9 @@ class OnePass
     end
 
     def login username:, password:, account_key:, uuid:
+        # TODO: Pass this in as Credentials?
+        credentials = Credentials.new username: username, password: password, account_key: account_key
+
         response = get_user_info username, uuid
         @session = Session.new response
         @key = Srp.perform username: username,
@@ -246,6 +264,37 @@ class OnePass
                            session: @session,
                            http: self
         verify_key
+        get_account_info credentials
+    end
+
+    def get_account_info credentials
+        account_info = JSON.load decrypt_payload get ["accountpanel"]
+        decrypt_keys account_info["user"]["keysets"], credentials
+    end
+
+    def decrypt_keys keysets, credentials
+        sorted = keysets.sort_by { |i| i["sn"] }.reverse
+        raise "Invalid keyset (key must be encrypted by 'mp')" if sorted[0]["encryptedBy"] != "mp"
+        @master_key = derive_master_key sorted[0]["encSymKey"], credentials
+    end
+
+    def derive_master_key key_info, credentials
+        algorithm = key_info["alg"]
+        encryption = key_info["enc"]
+        iterations = key_info["p2c"]
+        salt = Util.base64_to_str key_info["p2s"]
+        username = credentials.username.downcase
+        password = Util.normalize_utf8 credentials.password
+        account_key = credentials.account_key
+
+        if algorithm.start_with? "PBES2-"
+            raise "Not supported yet"
+        elsif algorithm.start_with? "PBES2g-"
+            k1 = Crypto.hkdf salt, algorithm, username
+            k2 = Crypto.pbes2 algorithm, password, k1, iterations
+        else
+            raise "Invalid algorithm '#{algorithm}'"
+        end
     end
 
     def get_user_info email, uuid
@@ -368,6 +417,9 @@ def test_all
 
     assert Util.str_to_hex(op.instance_variable_get(:@key)) ==
         "d376bc3fdabc77d22ee987689a365c1ad58566829690effa1c1933c585c505df"
+
+    assert Util.str_to_hex(op.instance_variable_get(:@master_key)) ==
+        "2fc8d8da5d05c39ebc4603339267291b4977c1129879bf7f2d4010ca2fc1f5bd"
 end
 
 #
