@@ -123,6 +123,41 @@ module Crypto
 
         PBKDF256.dk password, salt, iterations, 32
     end
+
+    def self.decrypt_aes256gcm ciphertext, iv, key
+        c = OpenSSL::Cipher.new('aes-256-gcm')
+        c.decrypt
+        c.key = key
+        c.iv = iv
+        c.auth_tag = ciphertext[-16..-1]
+        c.auth_data = ""
+        c.update(ciphertext[0...-16]) + c.final
+    end
+end
+
+class EncryptionKey
+    # TODO: Remove copy paste
+    CONTAINER_TYPE = "b5+jwk+json"
+    ENCRYPTION_MODE = "A256GCM"
+
+    attr_reader :id, :key
+
+    def initialize id:, key:
+        @id = id
+        @key = key
+    end
+
+    def decrypt payload
+        raise "Unsupported container type '#{payload["cty"]}'" if payload["cty"] != CONTAINER_TYPE
+        raise "Unsupported encryption '#{payload["enc"]}'" if payload["enc"] != ENCRYPTION_MODE
+        raise "Session ID does not match" if payload["kid"] != @id
+
+        ciphertext = Util.base64_to_str payload["data"]
+        iv = Util.base64_to_str payload["iv"]
+
+        Crypto.decrypt_aes256gcm ciphertext, iv, @key
+    end
+
 end
 
 class Session
@@ -301,7 +336,11 @@ class OnePass
     def decrypt_keys keysets, credentials
         sorted = keysets.sort_by { |i| i["sn"] }.reverse
         raise "Invalid keyset (key must be encrypted by 'mp')" if sorted[0]["encryptedBy"] != "mp"
-        @master_key = derive_master_key sorted[0]["encSymKey"], credentials
+
+        key = derive_master_key sorted[0]["encSymKey"], credentials
+        @master_key = EncryptionKey.new id: "mp", key: key
+
+        JSON.load @master_key.decrypt sorted[0]["encSymKey"]
     end
 
     def derive_master_key key_info, credentials
@@ -452,7 +491,8 @@ def test_all
     assert Util.str_to_hex(op.instance_variable_get(:@key)) ==
         "d376bc3fdabc77d22ee987689a365c1ad58566829690effa1c1933c585c505df"
 
-    assert Util.str_to_hex(op.instance_variable_get(:@master_key)) ==
+    assert op.instance_variable_get(:@master_key).id == "mp"
+    assert Util.str_to_hex(op.instance_variable_get(:@master_key).key) ==
         "44c38e8fedb84a1ab5ba74ed98dde931f6500ae39c1d9c85e20a7268ab2074f0"
 end
 
