@@ -318,6 +318,7 @@ class OnePass
         elsif algorithm.start_with? "PBES2g-"
             k1 = Crypto.hkdf salt, algorithm, username
             k2 = Crypto.pbes2 algorithm, password, k1, iterations
+            account_key.combine k2
         else
             raise "Invalid algorithm '#{algorithm}'"
         end
@@ -452,7 +453,7 @@ def test_all
         "d376bc3fdabc77d22ee987689a365c1ad58566829690effa1c1933c585c505df"
 
     assert Util.str_to_hex(op.instance_variable_get(:@master_key)) ==
-        "2fc8d8da5d05c39ebc4603339267291b4977c1129879bf7f2d4010ca2fc1f5bd"
+        "44c38e8fedb84a1ab5ba74ed98dde931f6500ae39c1d9c85e20a7268ab2074f0"
 end
 
 #
