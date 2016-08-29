@@ -124,6 +124,21 @@ module Crypto
         PBKDF256.dk password, salt, iterations, 32
     end
 
+    # Notes on the encryption
+    #
+    # It seems 1password has AES-256-GCM hardcoded, though there are the "alg"
+    # and the "enc" parameters everywhere
+    # The authentication tag is simply appended to the ciphertext (the last 16 bytes)
+
+    def self.encrypt_aes256gcm plaintext, iv, key
+        c = OpenSSL::Cipher.new('aes-256-gcm')
+        c.encrypt
+        c.key = key
+        c.iv = iv
+        c.auth_data = ""
+        c.update(plaintext) + c.final + c.auth_tag
+    end
+
     def self.decrypt_aes256gcm ciphertext, iv, key
         c = OpenSSL::Cipher.new('aes-256-gcm')
         c.decrypt
@@ -147,6 +162,23 @@ class EncryptionKey
         @key = key
     end
 
+    def encrypt plaintext, iv
+        ciphertext = Crypto.encrypt_aes256gcm plaintext, iv, @key
+        ciphertext_base64 = Util.str_to_base64 ciphertext
+        iv_base64 = Util.str_to_base64 iv
+
+        # The order is important as it matches one in Js. Otherwise mitmproxy doesn't
+        # recognize the request. Like this it's possible to replay against the flow
+        # recorded with the webpage.
+        {
+            "kid" => @id,
+            "enc" => ENCRYPTION_MODE,
+            "cty" => CONTAINER_TYPE,
+            "iv" => iv_base64,
+            "data" => ciphertext_base64,
+        }
+    end
+
     def decrypt payload
         raise "Unsupported container type '#{payload["cty"]}'" if payload["cty"] != CONTAINER_TYPE
         raise "Unsupported encryption '#{payload["enc"]}'" if payload["enc"] != ENCRYPTION_MODE
@@ -157,7 +189,6 @@ class EncryptionKey
 
         Crypto.decrypt_aes256gcm ciphertext, iv, @key
     end
-
 end
 
 class Session
@@ -282,7 +313,9 @@ class Srp
         s = Util.bn_from_str @session.id
         y = @shared_b - SIRP_g.mod_exp(x, SIRP_N) * s
         z = y.mod_exp @secret_a + hash_a_b * x, SIRP_N
-        Crypto.sha256 Util.bn_to_hex z
+        key = Crypto.sha256 Util.bn_to_hex z
+
+        EncryptionKey.new id: @session.id, key: key
     end
 
     def compute_x
@@ -376,56 +409,11 @@ class OnePass
     end
 
     def encrypt_payload plaintext, iv
-        ciphertext = encrypt plaintext, iv
-        ciphertext_base64 = Util.str_to_base64 ciphertext
-        iv_base64 = Util.str_to_base64 iv
-
-        # The order is important as it matches one in Js. Otherwise mitmproxy doesn't
-        # recognize the request. Like this it's possible to replay against the flow
-        # recorded with the webpage.
-        {
-            "kid" => @session.id,
-            "enc" => ENCRYPTION_MODE,
-            "cty" => CONTAINER_TYPE,
-            "iv" => iv_base64,
-            "data" => ciphertext_base64,
-        }
+        @key.encrypt plaintext, iv
     end
 
     def decrypt_payload payload
-        raise "Unsupported container type '#{payload["cty"]}'" if payload["cty"] != CONTAINER_TYPE
-        raise "Unsupported encryption '#{payload["enc"]}'" if payload["enc"] != ENCRYPTION_MODE
-        raise "Session ID does not match" if payload["kid"] != @session.id
-
-        ciphertext = Util.base64_to_str payload["data"]
-        iv = Util.base64_to_str payload["iv"]
-
-        decrypt ciphertext, iv
-    end
-
-    # Notes on the encryption
-    #
-    # It seems 1password has AES-256-GCM hardcoded, though there are the "alg"
-    # and the "enc" parameters everywhere
-    # The authentication tag is simply appended to the ciphertext (the last 16 bytes)
-
-    def encrypt plaintext, iv
-        c = OpenSSL::Cipher.new('aes-256-gcm')
-        c.encrypt
-        c.key = @key
-        c.iv = iv
-        c.auth_data = ""
-        c.update(plaintext) + c.final + c.auth_tag
-    end
-
-    def decrypt ciphertext, iv
-        c = OpenSSL::Cipher.new('aes-256-gcm')
-        c.decrypt
-        c.key = @key
-        c.iv = iv
-        c.auth_tag = ciphertext[-16..-1]
-        c.auth_data = ""
-        c.update(ciphertext[0...-16]) + c.final
+        @key.decrypt payload
     end
 
     #
@@ -465,12 +453,11 @@ def assert condition
 end
 
 def test_encrypt
-    op = OnePass.new
-    op.instance_variable_set :@key, "key key key key key key key key!"
-    ciphertext = op.encrypt "plaintext", "iv iv iv iv!"
+    ciphertext = Crypto.encrypt_aes256gcm "plaintext",
+                                          "iv iv iv iv!",
+                                          "key key key key key key key key!"
 
-    assert Util.str_to_hex(ciphertext) ==
-        "94ae5caa13ff087e455691d8e5d38ee438e01116fde4341228"
+    assert Util.str_to_hex(ciphertext) == "94ae5caa13ff087e455691d8e5d38ee438e01116fde4341228"
 end
 
 def test_account_key_parse
@@ -488,12 +475,12 @@ def test_all
              account_key: config["account_key"],
              uuid: config["uuid"]
 
-    assert Util.str_to_hex(op.instance_variable_get(:@key)) ==
-        "d376bc3fdabc77d22ee987689a365c1ad58566829690effa1c1933c585c505df"
+    key = op.instance_variable_get(:@key)
+    assert Util.str_to_hex(key.key) == "d376bc3fdabc77d22ee987689a365c1ad58566829690effa1c1933c585c505df"
 
-    assert op.instance_variable_get(:@master_key).id == "mp"
-    assert Util.str_to_hex(op.instance_variable_get(:@master_key).key) ==
-        "44c38e8fedb84a1ab5ba74ed98dde931f6500ae39c1d9c85e20a7268ab2074f0"
+    master_key = op.instance_variable_get(:@master_key)
+    assert master_key.id == "mp"
+    assert Util.str_to_hex(master_key.key) == "44c38e8fedb84a1ab5ba74ed98dde931f6500ae39c1d9c85e20a7268ab2074f0"
 end
 
 #
