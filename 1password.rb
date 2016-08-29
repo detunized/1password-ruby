@@ -362,7 +362,7 @@ class OnePass
         get_account_info credentials
     end
 
-    def http_key
+    def session_key
         @keys[@session.id]
     end
 
@@ -426,11 +426,11 @@ class OnePass
     end
 
     def encrypt_payload plaintext, iv
-        http_key.encrypt plaintext, iv
+        session_key.encrypt plaintext, iv
     end
 
     def decrypt_payload payload
-        http_key.decrypt payload
+        session_key.decrypt payload
     end
 
     #
@@ -492,7 +492,7 @@ def test_all
              account_key: config["account_key"],
              uuid: config["uuid"]
 
-    key = op.send :http_key
+    key = op.send :session_key
     assert Util.str_to_hex(key.key) == "d376bc3fdabc77d22ee987689a365c1ad58566829690effa1c1933c585c505df"
 
     keys = op.instance_variable_get :@keys
