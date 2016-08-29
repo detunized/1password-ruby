@@ -337,12 +337,12 @@ class Srp
 end
 
 class OnePass
-    CONTAINER_TYPE = "b5+jwk+json"
-    ENCRYPTION_MODE = "A256GCM"
+    MASTER_KEY_ID = "mp"
 
     def initialize http = nil
         @http = http || Http.new
         @host = "my.1password.com"
+        @keys = {}
     end
 
     def login username:, password:, account_key:, uuid:
@@ -352,13 +352,22 @@ class OnePass
 
         response = get_user_info username, uuid
         @session = Session.new response
-        @key = Srp.perform username: username,
+        add_key Srp.perform username: username,
                            password: password,
                            account_key: account_key,
                            session: @session,
                            http: self
+
         verify_key
         get_account_info credentials
+    end
+
+    def http_key
+        @keys[@session.id]
+    end
+
+    def add_key key
+        @keys[key.id] = key
     end
 
     def get_account_info credentials
@@ -368,12 +377,18 @@ class OnePass
 
     def decrypt_keys keysets, credentials
         sorted = keysets.sort_by { |i| i["sn"] }.reverse
-        raise "Invalid keyset (key must be encrypted by 'mp')" if sorted[0]["encryptedBy"] != "mp"
 
-        key = derive_master_key sorted[0]["encSymKey"], credentials
-        @master_key = EncryptionKey.new id: "mp", key: key
+        if sorted[0]["encryptedBy"] != MASTER_KEY_ID
+            raise "Invalid keyset (key must be encrypted by '#{MASTER_KEY_ID}')"
+        end
 
-        JSON.load @master_key.decrypt sorted[0]["encSymKey"]
+        add_key derive_master_key sorted[0]["encSymKey"], credentials
+
+        sorted.each do |i|
+            key_info = JSON.load @keys[i["encryptedBy"]].decrypt i["encSymKey"]
+            key = Util.base64_to_str key_info["k"]
+            add_key EncryptionKey.new id: i["uuid"], key: key
+        end
     end
 
     def derive_master_key key_info, credentials
@@ -390,7 +405,9 @@ class OnePass
         elsif algorithm.start_with? "PBES2g-"
             k1 = Crypto.hkdf salt, algorithm, username
             k2 = Crypto.pbes2 algorithm, password, k1, iterations
-            account_key.combine k2
+            key = account_key.combine k2
+
+            EncryptionKey.new id: MASTER_KEY_ID, key: key
         else
             raise "Invalid algorithm '#{algorithm}'"
         end
@@ -409,11 +426,11 @@ class OnePass
     end
 
     def encrypt_payload plaintext, iv
-        @key.encrypt plaintext, iv
+        http_key.encrypt plaintext, iv
     end
 
     def decrypt_payload payload
-        @key.decrypt payload
+        http_key.decrypt payload
     end
 
     #
@@ -475,10 +492,11 @@ def test_all
              account_key: config["account_key"],
              uuid: config["uuid"]
 
-    key = op.instance_variable_get(:@key)
+    key = op.send :http_key
     assert Util.str_to_hex(key.key) == "d376bc3fdabc77d22ee987689a365c1ad58566829690effa1c1933c585c505df"
 
-    master_key = op.instance_variable_get(:@master_key)
+    keys = op.instance_variable_get :@keys
+    master_key = keys["mp"]
     assert master_key.id == "mp"
     assert Util.str_to_hex(master_key.key) == "44c38e8fedb84a1ab5ba74ed98dde931f6500ae39c1d9c85e20a7268ab2074f0"
 end
