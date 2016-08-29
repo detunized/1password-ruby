@@ -145,6 +145,39 @@ class Session
     end
 end
 
+class AccountKey
+    attr_reader :format, :uuid, :key
+
+    def self.parse str
+        s = str.upcase.gsub "-", ""
+        format = s[0, 2]
+        if (format == "A2" && s.size == 33) || (format == "A3" && s.size == 34)
+            new format: format,
+                uuid: s[2...8],
+                key: s[8..-1]
+        else
+            raise "Invalid account key format"
+        end
+    end
+
+    def initialize format:, uuid:, key:
+        @key = key
+        @format = format
+        @uuid = uuid
+    end
+
+    def hash
+        Crypto.hkdf @key, @format, @uuid
+    end
+
+    def combine str
+        h = hash.bytes
+        s = str.bytes
+        raise "Size doesn't match hash function" if h.size != s.size
+        Util.bytes_to_str h.size.times.map { |i| h[i] ^ s[i] }
+    end
+end
+
 class Credentials
     attr_reader :username, :password, :account_key
 
@@ -228,18 +261,10 @@ class Srp
         elsif method.start_with? "SRPg-"
             k1 = Crypto.hkdf @session.salt, method, @username
             k2 = Crypto.pbes2 @session.key_method, @password, k1, iterations
-            Util.bn_from_str combine_with_account_key k2
+            Util.bn_from_str @account_key.combine k2
         else
             raise "Invalid method '#{auth["userAuth"]["method"]}'"
         end
-    end
-
-    def combine_with_account_key key
-        a = Crypto.hkdf @account_key, @session.key_format, @session.key_uuid
-        ab = a.bytes
-        kb = key.bytes
-        raise "Key doesn't match hash function" if kb.size != ab.size
-        Util.bytes_to_str ab.size.times.map { |i| ab[i] ^ kb[i] }
     end
 end
 
@@ -253,6 +278,7 @@ class OnePass
     end
 
     def login username:, password:, account_key:, uuid:
+        account_key = AccountKey.parse account_key if account_key.is_a? String
         # TODO: Pass this in as Credentials?
         credentials = Credentials.new username: username, password: password, account_key: account_key
 
@@ -405,6 +431,13 @@ def test_encrypt
 
     assert Util.str_to_hex(ciphertext) ==
         "94ae5caa13ff087e455691d8e5d38ee438e01116fde4341228"
+end
+
+def test_account_key_parse
+    k = AccountKey.parse "A3-RTN9SA-DY9445Y5FF96X6E7B5GPFA95R9"
+    assert k.format == "A3"
+    assert k.uuid == "RTN9SA"
+    assert k.key == "DY9445Y5FF96X6E7B5GPFA95R9"
 end
 
 def test_all
