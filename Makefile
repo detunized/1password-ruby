@@ -1,3 +1,3 @@
 .PHONY: default
 default:
-	@bundle exec ruby 1password.rb
+	@bundle exec ruby -r ap 1password.rb
