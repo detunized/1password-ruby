@@ -22,8 +22,8 @@ class Http
 
     def initialize
         @options = {
-            http_proxyaddr: "localhost",
-            http_proxyport: 8080,
+            # http_proxyaddr: "localhost",
+            # http_proxyport: 8080,
             verify: false
         }
 
@@ -352,6 +352,7 @@ class OnePass
 
         response = get_user_info username, uuid
         @session = Session.new response
+
         add_key Srp.perform username: username,
                            password: password,
                            account_key: account_key,
@@ -359,6 +360,7 @@ class OnePass
                            http: self
 
         verify_key
+
         get_account_info credentials
     end
 
@@ -372,7 +374,10 @@ class OnePass
 
     def get_account_info credentials
         account_info = JSON.load decrypt_payload get ["accountpanel"]
+
         decrypt_keys account_info["user"]["keysets"], credentials
+        parse_people account_info["people"]
+        get_vaults account_info["vaults"]
     end
 
     def decrypt_keys keysets, credentials
@@ -411,6 +416,24 @@ class OnePass
         else
             raise "Invalid algorithm '#{algorithm}'"
         end
+    end
+
+    def parse_people people
+    end
+
+    def get_vaults vaults
+        vaults.each do |i|
+            r = @http.get "https://my.1password.com/api/v1/vault/#{i["uuid"]}/items/overviews", request_headers
+            ap JSON.load decrypt_payload r
+        end
+    end
+
+    def get_groups
+        r = @http.get "https://my.1password.com/api/v1/accountpanel/group/27tqtfrsxlzxyeal6rawfnwwhq?attrs=pubkey,vaultaccess", request_headers
+        File.open("group.json", "w") { |io| io.write decrypt_payload r }
+
+        r = @http.get "https://my.1password.com/api/v1/accountpanel/vault/4tz67op2kfiapodi5ygprtwn64?attrs=accessors", request_headers
+        File.open("vault.json", "w") { |io| io.write decrypt_payload r }
     end
 
     def get_user_info email, uuid
