@@ -338,7 +338,7 @@ SIRP_g = OpenSSL::BN.new 5
 
 class Srp
     def self.perform username, password, account_key, session, http
-        srp = new  username, password, account_key, session, http
+        srp = new username, password, account_key, session, http
         srp.perform
     end
 
@@ -464,6 +464,30 @@ def start_new_session username, uuid, http
     Session.from_json response
 end
 
+# TODO: Think of a better name, since the verification is just a side effect. Is it?
+def verify_key key, session, http
+    mock_response = {
+         "cty" => "b5+jwk+json",
+        "data" => "Fn2Z4qlq3uqqfzLLyhe_tsMOeA13iRyHiBy0HFlJRjQGXk-vrcN5L0zM" +
+                  "pOm3EBFqdOY1UqMXRuFwPuEXiBCHSs_D_ErXXCfjH6DGa51j0tVSVpnb" +
+                  "u6SMAZ1DVZ05XsFlT64rwr7i2g6LNmXQX767EKpU9WRrm34b08iXF7Pd" +
+                  "lAfnN2j60jusgPniphiU5XSgRabaqq3sN8SjoZ82zwcSNRVw7qthO2EC" +
+                  "fl_1BNmopv5n58LNRzRrQSFkKXLuOtAM_XiJNJc3H4bCV3QfNgK6bBGU" +
+                  "p6A2-ncwcmK6HWUKb-k6Ice3j3QrJk_J9c6n",
+         "enc" => "A256GCM",
+          "iv" => "s2wM_JBD77IqCsE6",
+         "kid" => "ZIMW7SO4URE5PEP2KHPZHWMRMA"
+    }
+
+    payload = JSON.dump({"sessionID" => session.id})
+    encrypted_payload = key.encrypt payload, "\0" * 12 # TODO: Generate random
+    response = http.post [HOST, "auth", "verify"].join("/"),
+               encrypted_payload,
+               {},
+               mock_response
+    JSON.load key.decrypt response
+end
+
 def login username, password, account_key, uuid, http
     account_key = AccountKey.parse account_key
 
@@ -473,7 +497,8 @@ def login username, password, account_key, uuid, http
     # Step 2: Perform SRP exchange
     key = Srp.perform username, password, account_key, session, http
 
-    ap key
+    # Step 3: Verify the key with the server
+    ap verify_key key, session, http
 end
 
 #
