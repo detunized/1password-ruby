@@ -16,12 +16,15 @@ HOST = "https://my.1password.com/api/v1"
 class Http
     include HTTParty
 
+    attr :headers
+
     # Network modes:
     #  - :default: return mock response if one is provided
     #  - :force_online: always go online
     #  - :force_offline: never go online and return mock even if it's nil
     def initialize network_mode = :default
         @network_mode = network_mode
+        @headers = {}
         @log = true
     end
 
@@ -67,16 +70,16 @@ class Http
     # private
     #
 
-    def get_raw url, headers = {}, mock_response = nil
+    def get_raw url, headers, mock_response
         return make_response mock_response if should_return_mock? mock_response
 
-        self.class.get url, headers: headers
+        self.class.get url, headers: @headers.merge(headers)
     end
 
     def post_raw url, args, headers, mock_response
         return make_response mock_response if should_return_mock? mock_response
 
-        self.class.post url, body: args, headers: headers
+        self.class.post url, body: args, headers: @headers.merge(headers)
     end
 
     def should_return_mock? mock_response
@@ -488,23 +491,34 @@ def verify_key key, session, http
     JSON.load key.decrypt response
 end
 
+def get_account_info key, http
+    url = [HOST, "accountpanel"].join "/"
+    JSON.load key.decrypt http.get url
+end
+
 def login username, password, account_key, uuid, http
     account_key = AccountKey.parse account_key
 
     # Step 1: Request to initiate a new session
     session = start_new_session username, uuid, http
 
+    # Make sure all requests have this header
+    http.headers["X-AgileBits-Session-ID"] = session.id
+
     # Step 2: Perform SRP exchange
     key = Srp.perform username, password, account_key, session, http
 
     # Step 3: Verify the key with the server
-    ap verify_key key, session, http
+    verify_key key, session, http
+
+    # Step 4: Get account info
+    info = get_account_info key, http
 end
 
 #
 # main
 #
 
-http = Http.new :force_offline
+http = Http.new :force_online
 config = YAML::load_file "config.yaml"
 login config["username"], config["password"], config["account_key"], config["uuid"], http
