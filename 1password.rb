@@ -61,6 +61,8 @@ class Http
             puts "HTTP: #{response.code}"
             ap response.parsed_response
         end
+
+        response.parsed_response
     end
 
     def put url, args = {}, headers = {}, mock_response = nil
@@ -80,6 +82,8 @@ class Http
             puts "HTTP: #{response.code}"
             ap response.parsed_response
         end
+
+        response.parsed_response
     end
 
     #
