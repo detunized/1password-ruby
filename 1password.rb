@@ -47,7 +47,7 @@ class Http
         response.parsed_response
     end
 
-    def post url, args, headers = {}, mock_response = nil
+    def post url, args = {}, headers = {}, mock_response = nil
         if @log
             puts "=" * 80
             puts "POST to #{url}"
@@ -58,6 +58,25 @@ class Http
                             args.to_json,
                             headers.merge({"Content-Type" => "application/json; charset=UTF-8"}),
                             mock_response
+
+        if @log
+            puts "-" * 40
+            puts "HTTP: #{response.code}"
+            ap response.parsed_response
+        end
+    end
+
+    def put url, args = {}, headers = {}, mock_response = nil
+        if @log
+            puts "=" * 80
+            puts "PUT to #{url}"
+            ap args
+        end
+
+        response = put_raw url,
+                           args.to_json,
+                           headers.merge({"Content-Type" => "application/json; charset=UTF-8"}),
+                           mock_response
 
         if @log
             puts "-" * 40
@@ -80,6 +99,12 @@ class Http
         return make_response mock_response if should_return_mock? mock_response
 
         self.class.post url, body: args, headers: @headers.merge(headers)
+    end
+
+    def put_raw url, args, headers, mock_response
+        return make_response mock_response if should_return_mock? mock_response
+
+        self.class.put url, body: args, headers: @headers.merge(headers)
     end
 
     def should_return_mock? mock_response
@@ -496,7 +521,12 @@ def get_account_info key, http
     JSON.load key.decrypt http.get url
 end
 
-def login username, password, account_key, uuid, http
+def sign_out http
+    url = [HOST, "session/signout"].join "/"
+    http.put url
+end
+
+def get_vault username, password, account_key, uuid, http
     account_key = AccountKey.parse account_key
 
     # Step 1: Request to initiate a new session
@@ -513,6 +543,9 @@ def login username, password, account_key, uuid, http
 
     # Step 4: Get account info
     info = get_account_info key, http
+
+    # Step ?: Sign out
+    sign_out http
 end
 
 #
@@ -521,4 +554,4 @@ end
 
 http = Http.new :force_online
 config = YAML::load_file "config.yaml"
-login config["username"], config["password"], config["account_key"], config["uuid"], http
+get_vault config["username"], config["password"], config["account_key"], config["uuid"], http
