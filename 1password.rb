@@ -6,8 +6,7 @@ require "hkdf"
 require "pbkdf256"
 require "securerandom"
 require "httparty"
-
-HOST = "https://my.1password.com/api/v1"
+require "json/jwt"
 
 #
 # Network
@@ -22,7 +21,7 @@ class Http
     #  - :force_offline: never go online and return mock even if it's nil
     def initialize network_mode = :default
         @network_mode = network_mode
-        @log = true
+        @log = false
     end
 
     def get url, headers = {}, mock_response = nil
@@ -130,6 +129,12 @@ end
 #
 # Utils
 #
+
+class String
+    def d64
+        Util.base64_to_str self
+    end
+end
 
 module Util
     def self.bn_to_hex bn
@@ -300,12 +305,48 @@ class AccountKey
     end
 end
 
-class EncryptionKey
-    # TODO: Remove copy paste
-    CONTAINER_TYPE = "b5+jwk+json"
-    ENCRYPTION_MODE = "A256GCM"
+class KeySet
+    attr_reader :id, :aes, :rsa
 
-    attr_reader :id, :key
+    def initialize id:, aes:, rsa:
+        @id = id
+        @aes = aes
+        @rsa = rsa
+
+        raise "AES key ID doesn't match" if aes && aes.id != id
+        raise "RSA key ID doesn't match" if rsa && rsa.id != id
+    end
+
+    def key scheme
+        case scheme
+        when "A256GCM"
+            @aes
+        when "RSA-OAEP"
+            @rsa
+        else
+            raise "Encryption scheme '#{scheme}' is not supported"
+        end
+    end
+
+    def decrypt jwe_container
+        enc = jwe_container["enc"]
+        k = key enc
+        raise "'#{enc}' encryption scheme is not supported by this keyset" if k.nil?
+
+        k.decrypt jwe_container
+    end
+end
+
+class AesKey
+    CONTAINER_TYPE = "b5+jwk+json"
+    ENCRYPTION_SCHEME = "A256GCM"
+
+    attr_reader :id
+
+    def self.from_json json
+        new id: json["kid"],
+            key: json["k"].d64
+    end
 
     def initialize id:, key:
         @id = id
@@ -322,22 +363,61 @@ class EncryptionKey
         # recorded with the webpage.
         {
             "kid" => @id,
-            "enc" => ENCRYPTION_MODE,
+            "enc" => ENCRYPTION_SCHEME,
             "cty" => CONTAINER_TYPE,
             "iv" => iv_base64,
             "data" => ciphertext_base64,
         }
     end
 
-    def decrypt payload
-        raise "Unsupported container type '#{payload["cty"]}'" if payload["cty"] != CONTAINER_TYPE
-        raise "Unsupported encryption '#{payload["enc"]}'" if payload["enc"] != ENCRYPTION_MODE
-        raise "Session ID does not match" if payload["kid"] != @id
+    def decrypt jwe_container
+        cty = jwe_container["cty"]
+        enc = jwe_container["enc"]
+        kid = jwe_container["kid"]
 
-        ciphertext = Util.base64_to_str payload["data"]
-        iv = Util.base64_to_str payload["iv"]
+        raise "Unsupported container type '#{cty}'" if cty != CONTAINER_TYPE
+        raise "Unsupported encryption scheme '#{enc}'" if enc != ENCRYPTION_SCHEME
+        raise "Key ID does not match" if kid != @id
+
+        ciphertext = Util.base64_to_str jwe_container["data"]
+        iv = Util.base64_to_str jwe_container["iv"]
 
         Crypto.decrypt_aes256gcm ciphertext, iv, @key
+    end
+end
+
+class RsaKey
+    CONTAINER_TYPE = "b5+jwk+json"
+    ENCRYPTION_SCHEME = "RSA-OAEP"
+
+    attr_reader :id
+
+    def self.from_json json
+        # TODO: Get rid of JWK, it's only used to parse the key
+        new id: json["kid"],
+            key: JSON::JWK.new(json).to_key
+    end
+
+    def initialize id:, key:
+        @id = id
+        @key = key
+    end
+
+    def encrypt plaintext
+        raise "'#{ENCRYPTION_SCHEME}' encryption is not supported"
+    end
+
+    def decrypt jwe_container
+        cty = jwe_container["cty"]
+        enc = jwe_container["enc"]
+        kid = jwe_container["kid"]
+
+        raise "Unsupported container type '#{cty}'" if cty != CONTAINER_TYPE
+        raise "Unsupported encryption scheme '#{enc}'" if enc != ENCRYPTION_SCHEME
+        raise "Key ID does not match" if kid != @id
+
+        @key.private_decrypt jwe_container["data"].d64,
+                             OpenSSL::PKey::RSA::PKCS1_OAEP_PADDING
     end
 end
 
@@ -446,7 +526,7 @@ class Srp
         z = y.mod_exp @secret_a + hash_a_b * x, SIRP_N
         key = Crypto.sha256 Util.bn_to_hex z
 
-        EncryptionKey.new id: @session.id, key: key
+        AesKey.new id: @session.id, key: key
     end
 
     def compute_x
@@ -479,10 +559,12 @@ class ClientInfo
 end
 
 class OnePassword
+    MASTER_KEY_ID = "mp"
+
     def initialize http
         @http = http
         @host = "my.1password.com"
-        @keys = {}
+        @keysets = {}
         @session = nil
     end
 
@@ -494,24 +576,114 @@ class OnePassword
         add_key Srp.perform client_info, @session, self
 
         # Step 3: Verify the key with the server
-        verify_key
+        verify_session_key
 
         # Step 4: Get account info
-        info = get_account_info
+        account_info = get_account_info
+
+        # Step 5: Derive and decrypt keys
+        decrypt_keysets account_info["user"]["keysets"], client_info
 
         # Step ?: Sign out
         sign_out
 
-        ap info
     end
 
+    #
+    # Key management
+    #
+
     def session_key
-        @keys[@session.id]
+        @keysets[@session.id].aes
     end
 
     def add_key key
-        @keys[key.id] = key
+        @keysets[key.id] = KeySet.new id: key.id, aes: key, rsa: nil
     end
+
+    def add_keyset keyset
+        @keysets[keyset.id] = keyset
+    end
+
+    # Decrypts with one of the stored keysets
+    def decrypt jwe_container
+        kid = jwe_container["kid"]
+        ks = @keysets[kid]
+        raise "Keyset '#{kid}' doesn't exist" if ks.nil?
+
+        ks.decrypt jwe_container
+    end
+
+    # Decrypts with one of the stored keysets
+    def decrypt_json jwe_container
+        JSON.load decrypt jwe_container
+    end
+
+    def decrypt_with_key jwe_container, key
+        key.decrypt jwe_container
+    end
+
+    def decrypt_json_with_key jwe_container, key
+        JSON.load decrypt_with_key jwe_container, key
+    end
+
+    #
+    # Crypto
+    #
+
+    # TODO: Remove account_info parameter
+    def decrypt_keysets keysets, client_info
+        sorted = keysets.sort_by { |i| i["sn"] }.reverse
+
+        if sorted[0]["encryptedBy"] != MASTER_KEY_ID
+            raise "Invalid keyset (key must be encrypted by '#{MASTER_KEY_ID}')"
+        end
+        # It's encrypted with the key derived from the username, the master password,
+        # the account key and the salt received from the server
+        add_key derive_master_key sorted[0]["encSymKey"], client_info
+
+        # Decrypt the all the keysets. The first one should be decrypted by 'mp'.
+        # And the next ones with already decrypted keys at that point.
+        sorted.each do |i|
+            add_keyset decrypt_keyset i
+        end
+    end
+
+    def decrypt_keyset keyset
+        # Should be encrypted with one of the keys decrypted at this point
+        aes = AesKey.from_json decrypt_json keyset["encSymKey"]
+
+        # Should be encrypted with the AES key we've just decrypted
+        rsa = RsaKey.from_json decrypt_json_with_key keyset["encPriKey"], aes
+
+        KeySet.new id: keyset["uuid"], aes: aes, rsa: rsa
+    end
+
+    def derive_master_key key_info, client_info
+        algorithm = key_info["alg"]
+        encryption = key_info["enc"]
+        iterations = key_info["p2c"]
+        salt = Util.base64_to_str key_info["p2s"]
+        username = client_info.username.downcase
+        password = Util.normalize_utf8 client_info.password
+        account_key = client_info.account_key
+
+        if algorithm.start_with? "PBES2-"
+            raise "Not supported yet"
+        elsif algorithm.start_with? "PBES2g-"
+            k1 = Crypto.hkdf salt, algorithm, username
+            k2 = Crypto.pbes2 algorithm, password, k1, iterations
+            key = account_key.combine k2
+
+            AesKey.new id: MASTER_KEY_ID, key: key
+        else
+            raise "Invalid algorithm '#{algorithm}'"
+        end
+    end
+
+    #
+    # Network requests
+    #
 
     # Returns the new session
     def start_new_session client_info
@@ -533,7 +705,7 @@ class OnePassword
     end
 
     # TODO: Think of a better name, since the verification is just a side effect. Is it?
-    def verify_key
+    def verify_session_key
         mock_response = {
              "cty" => "b5+jwk+json",
             "data" => "Fn2Z4qlq3uqqfzLLyhe_tsMOeA13iRyHiBy0HFlJRjQGXk-vrcN5L0zM" +
@@ -610,7 +782,7 @@ end
 # main
 #
 
-http = Http.new :force_online
+http = Http.new :force_offline
 config = YAML::load_file "config.yaml"
 client_info = ClientInfo.new username: config["username"],
                              password: config["password"],
