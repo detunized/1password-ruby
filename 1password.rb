@@ -331,7 +331,7 @@ class KeySet
     def decrypt jwe_container
         enc = jwe_container["enc"]
         k = key enc
-        raise "'#{enc}' encryption scheme is not supported by this keyset" if k.nil?
+        raise "'#{enc}' encryption scheme is not supported by keyset '#{@id}'" if k.nil?
 
         k.decrypt jwe_container
     end
@@ -583,10 +583,11 @@ class OnePassword
 
         # Step 5: Derive and decrypt keys
         decrypt_keysets account_info["user"]["keysets"], client_info
+        decrypt_group_keys account_info["groups"]
+        decrypt_vault_keys account_info["user"]["vaultAccess"]
 
         # Step ?: Sign out
         sign_out
-
     end
 
     #
@@ -678,6 +679,18 @@ class OnePassword
             AesKey.new id: MASTER_KEY_ID, key: key
         else
             raise "Invalid algorithm '#{algorithm}'"
+        end
+    end
+
+    def decrypt_group_keys groups
+        groups.each do |i|
+            add_keyset decrypt_keyset i["userMembership"]["keyset"]
+        end
+    end
+
+    def decrypt_vault_keys vault_access
+        vault_access.each do |i|
+            add_key AesKey.from_json decrypt_json i["encVaultKey"]
         end
     end
 
