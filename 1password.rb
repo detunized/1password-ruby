@@ -21,7 +21,7 @@ class Http
     #  - :force_offline: never go online and return mock even if it's nil
     def initialize network_mode = :default
         @network_mode = network_mode
-        @log = false
+        @log = true
     end
 
     def get url, headers = {}, mock_response = nil
@@ -558,6 +558,18 @@ class ClientInfo
     end
 end
 
+class Vault < Struct.new :id, :name, :accounts
+    def initialize id:, name:, accounts:
+        super id, name, accounts
+    end
+end
+
+class Account < Struct.new :id, :name, :username, :password, :url, :notes
+    def initialize id:, name:, username:, password:, url:, notes:
+        super id, name, username, password, url, notes
+    end
+end
+
 class OnePassword
     MASTER_KEY_ID = "mp"
 
@@ -568,7 +580,8 @@ class OnePassword
         @session = nil
     end
 
-    def get_vault client_info
+    # Returns an array of Vault objects
+    def open_all_vaults client_info
         # Step 1: Request to initiate a new session
         @session = start_new_session client_info
 
@@ -586,8 +599,14 @@ class OnePassword
         decrypt_group_keys account_info["groups"]
         decrypt_vault_keys account_info["user"]["vaultAccess"]
 
-        # Step ?: Sign out
+        # Step 6: Get vaults
+        vaults = get_vaults account_info["vaults"]
+
+        # Step 7: Sign out not leave stale sessions
         sign_out
+
+        # Done
+        vaults
     end
 
     #
@@ -753,6 +772,39 @@ class OnePassword
         get_json ["accountpanel"], mock_response
     end
 
+    def get_vaults vaults_info
+        vaults_info.map do |info|
+            id = info["uuid"]
+            attrs = decrypt_json info["encAttrs"]
+            Vault.new id: id,
+                      name: attrs["name"],
+                      accounts: get_vault_accounts(id)
+        end
+    end
+
+    def get_vault_accounts id
+        vault = get_json ["vault", id, "0", "items"]
+        vault["items"].map { |i|
+            parse_account i["uuid"],
+                          decrypt_json(i["encOverview"]),
+                          decrypt_json(i["encDetails"])
+        }
+    end
+
+    def parse_account id, overview, details
+        Account.new id: id,
+                    name: overview["title"],
+                    username: find_field(details["fields"], "username"),
+                    password: find_field(details["fields"], "password"),
+                    url: overview["url"],
+                    notes: details["notesPlain"]
+    end
+
+    def find_field fields, id
+        f = fields.find { |i| i["designation"] == id } || {}
+        f["value"] || ""
+    end
+
     def sign_out
         mock_response = {"success" => 1}
         put ["session", "signout"], {}, mock_response
@@ -803,7 +855,9 @@ class OnePassword
                 "X-AgileBits-Session-ID" => @session.id,
 
                 # TODO: Compute this, at the moment it look like it's verified by the server
-                "X-AgileBits-MAC" => ""
+                #       It's not added to the headers as a blank in case the server starts
+                #       verifying it when it's present.
+                # "X-AgileBits-MAC" => ""
             }
         else
             {}
@@ -815,12 +869,24 @@ end
 # main
 #
 
-http = Http.new :force_offline
+# TODO: Figure out where the uuid comes from. Can we use some random one?
+
+# Set up and prepare the credentials
+http = Http.new :force_online
 config = YAML::load_file "config.yaml"
 client_info = ClientInfo.new username: config["username"],
                              password: config["password"],
                              account_key: config["account_key"],
                              uuid: config["uuid"]
 
+# Open all the vaults
 op = OnePassword.new http
-op.get_vault client_info
+vaults = op.open_all_vaults client_info
+
+# Print out the results
+vaults.each_with_index do |v, i|
+    puts "#{i + 1}: '#{v.name}' #{v.id}"
+    v.accounts.each_with_index do |a, i|
+        puts "  - #{i + 1}: #{a.name} #{a.username} #{a.password} #{a.url} #{a.notes}"
+    end
+end
