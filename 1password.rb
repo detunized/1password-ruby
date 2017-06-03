@@ -557,6 +557,10 @@ class Account < Struct.new :id, :name, :username, :password, :url, :notes
 end
 
 class OnePassword
+    CLIENT_NAME = "1Password for Web"
+    CLIENT_VERSION = "348"
+    CLIENT_ID_STRING = "#{CLIENT_NAME}/#{CLIENT_VERSION}"
+
     MASTER_KEY_ID = "mp"
 
     def initialize http
@@ -704,7 +708,7 @@ class OnePassword
     #
 
     # Returns the new session
-    def start_new_session client_info
+    def start_new_session client_info, retry_count = 1
         mock_response = {
                       "status" => "ok",
                    "sessionID" => "ZIMW7SO4URE5PEP2KHPZHWMRMA",
@@ -719,7 +723,47 @@ class OnePassword
         }
 
         response = get ["auth", client_info.username, client_info.uuid, "-"], mock_response
-        Session.from_json response
+
+        # All good
+        return Session.from_json response if response["status"] == "ok"
+
+        # Out of retries
+        raise "Failed to start a new session" if retry_count <= 0
+
+        # Handle known problems
+        status = response["status"]
+        case status
+        when "device-not-registered"
+            register_device client_info, response["sessionID"]
+        when "device-deleted"
+            reauthorize_device client_info, response["sessionID"]
+        else
+            raise "Failed to start a new session, unsupported response status '#{status}'"
+        end
+
+        # Retry
+        start_new_session client_info, retry_count - 1
+    end
+
+    def register_device client_info, temp_session_id
+        mock_response = {"success" => 1}
+        response = post_with_temp_session ["device"], {
+                     "uuid" => client_info.uuid,
+               "clientName" => CLIENT_NAME,
+            "clientVersion" => CLIENT_VERSION
+        }, temp_session_id, mock_response
+
+        raise "Failed to register the device '#{client_info.uuid}'" if response["success"] != 1
+    end
+
+    def reauthorize_device client_info, temp_session_id
+        mock_response = {"success" => 1}
+        response = put_with_temp_session ["device", client_info.uuid, "reauthorize"],
+                                         {},
+                                         temp_session_id,
+                                         mock_response
+
+        raise "Failed to reauthorize the device '#{client_info.uuid}'" if response["success"] != 1
     end
 
     # TODO: Think of a better name, since the verification is just a side effect. Is it?
@@ -831,14 +875,37 @@ class OnePassword
         @http.put "https://#{@host}/api/v1/#{url}", args, request_headers, mock_response
     end
 
-    def request_headers
-        {"X-AgileBits-Client" => "1Password for Web/343"}.merge session_request_headers
+    #
+    # Special POST/PUT which are needed to be signed with a temporary session id
+    # This is needed for requests like device registration or reauthorization
+    #
+
+    def post_with_temp_session url_components, args, temp_session_id, mock_response = nil
+        url = Util.url_escape_join url_components
+        @http.post "https://#{@host}/api/v1/#{url}",
+                   args,
+                   request_headers(temp_session_id),
+                   mock_response
     end
 
-    def session_request_headers
-        if @session
+    def put_with_temp_session url_components, args, temp_session_id, mock_response = nil
+        url = Util.url_escape_join url_components
+        @http.put "https://#{@host}/api/v1/#{url}",
+                  args,
+                  request_headers(temp_session_id),
+                  mock_response
+    end
+
+    def request_headers session_id = nil
+        {"X-AgileBits-Client" => CLIENT_ID_STRING}.merge session_request_headers(session_id)
+    end
+
+    def session_request_headers session_id = nil
+        session_id ||= @session.id if @session
+
+        if session_id
             {
-                "X-AgileBits-Session-ID" => @session.id,
+                "X-AgileBits-Session-ID" => session_id,
 
                 # TODO: Compute this, at the moment it look like it's verified by the server
                 #       It's not added to the headers as a blank in case the server starts
@@ -855,10 +922,10 @@ end
 # main
 #
 
-# TODO: Figure out where the uuid comes from. Can we use some random one?
+# TODO: Provide a function to generate random uuid in 1P format
 
 # Set up and prepare the credentials
-http = Http.new :force_offline
+http = Http.new :force_online
 config = YAML::load_file "config.yaml"
 client_info = ClientInfo.new username: config["username"],
                              password: config["password"],
