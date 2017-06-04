@@ -8,6 +8,8 @@ require "securerandom"
 require "httparty"
 require "json/jwt"
 
+# TODO: Move out all the mock responses to a separate file
+
 #
 # Network
 #
@@ -176,8 +178,17 @@ module Util
 end
 
 module Crypto
-    def random size
+    def self.random size
         SecureRandom.random_bytes size
+    end
+
+    BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
+
+    def self.random_uuid
+        26.times
+            .map { SecureRandom.random_number BASE32_ALPHABET.size }
+            .map { |i| BASE32_ALPHABET[i] }
+            .join
     end
 
     def self.sha256 str
@@ -563,6 +574,10 @@ class OnePassword
 
     MASTER_KEY_ID = "mp"
 
+    def self.generate_random_uuid
+        Crypto.random_uuid
+    end
+
     def initialize http
         @http = http
         @host = "my.1password.com"
@@ -921,8 +936,6 @@ end
 #
 # main
 #
-
-# TODO: Provide a function to generate random uuid in 1P format
 
 # Set up and prepare the credentials
 http = Http.new :force_online
