@@ -8,8 +8,6 @@ require "securerandom"
 require "httparty"
 require "json/jwt"
 
-# TODO: Move out all the mock responses to a separate file
-
 DEBUG_DISABLE_RANDOM = true
 DEBUG_NETWORK_LOG = true
 
@@ -21,14 +19,15 @@ class Http
     include HTTParty
 
     # Network modes:
-    #  - :default: return mock response if one is provided
+    #  - :default: return mock response if it exists in responses.yaml
     #  - :force_online: always go online
-    #  - :force_offline: never go online and return mock even if it's nil
+    #  - :force_offline: never go online and return nil even if it doesn't exist
     def initialize network_mode = :default
         @network_mode = network_mode
         @json_headers = {
             "Content-Type" => "application/json; charset=UTF-8"
         }
+        @responses = YAML.load_file "responses.yaml"
     end
 
     def get url, headers = {}, mock_response = nil
@@ -67,7 +66,11 @@ class Http
             ap args if args
         end
 
-        response = yield
+        response = if should_return_mock? url
+            make_response url
+        else
+            yield
+        end
 
         if DEBUG_NETWORK_LOG
             puts "-" * 40
@@ -81,27 +84,21 @@ class Http
     end
 
     def get_raw url, headers, mock_response
-        return make_response mock_response if should_return_mock? mock_response
-
         self.class.get url, headers: headers
     end
 
     def post_raw url, args, headers, mock_response
-        return make_response mock_response if should_return_mock? mock_response
-
         self.class.post url, body: args, headers: headers
     end
 
     def put_raw url, args, headers, mock_response
-        return make_response mock_response if should_return_mock? mock_response
-
         self.class.put url, body: args, headers: headers
     end
 
-    def should_return_mock? mock_response
+    def should_return_mock? url
         case @network_mode
         when :default
-            mock_response
+            @responses.key? url
         when :force_online
             false
         when :force_offline
@@ -111,9 +108,9 @@ class Http
         end
     end
 
-    def make_response mock_response
+    def make_response url
         @response_class ||= Struct.new :parsed_response, :code, :success?
-        @response_class.new mock_response, 200, true
+        @response_class.new @responses[url], 200, true
     end
 end
 
@@ -944,7 +941,7 @@ end
 #
 
 # Set up and prepare the credentials
-http = Http.new :force_online
+http = Http.new :force_offline
 config = YAML::load_file "config.yaml"
 client_info = ClientInfo.new username: config["username"],
                              password: config["password"],
