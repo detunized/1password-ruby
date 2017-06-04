@@ -28,6 +28,7 @@ class Http
             "Content-Type" => "application/json; charset=UTF-8"
         }
         @responses = YAML.load_file "responses.yaml"
+        @seen_urls = Hash.new { 0 }
     end
 
     def get url, headers = {}
@@ -64,10 +65,9 @@ class Http
             ap args if args
         end
 
-        response = if should_return_fake? url
-            make_response url
-        else
-            yield
+        response = make_fake_response url
+        if response.nil?
+            response = yield
         end
 
         if DEBUG_NETWORK_LOG
@@ -93,6 +93,33 @@ class Http
         self.class.put url, body: args, headers: headers
     end
 
+    def make_fake_response url
+        url_responses = @responses.find_all { |i| i["url"] == url }
+
+        case @network_mode
+        when :default
+            return nil if url_responses.empty?
+        when :force_online
+            return nil
+        when :force_offline
+            # Do nothing
+        else
+            raise "Invalid network_mode '#{@network_mode}'"
+        end
+
+        index = @seen_urls[url]
+        response = if index < url_responses.size
+            url_responses[index]
+        else
+            url_responses.last
+        end
+
+        @seen_urls[url] += 1
+
+        @response_class ||= Struct.new :parsed_response, :code, :success?
+        @response_class.new response["response"], 200, true
+    end
+
     def should_return_fake? url
         case @network_mode
         when :default
@@ -106,10 +133,6 @@ class Http
         end
     end
 
-    def make_response url
-        @response_class ||= Struct.new :parsed_response, :code, :success?
-        @response_class.new @responses[url], 200, true
-    end
 end
 
 #
