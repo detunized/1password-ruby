@@ -19,7 +19,7 @@ class Http
     include HTTParty
 
     # Network modes:
-    #  - :default: return mock response if it exists in responses.yaml
+    #  - :default: return a fake response if it exists in responses.yaml
     #  - :force_online: always go online
     #  - :force_offline: never go online and return nil even if it doesn't exist
     def initialize network_mode = :default
@@ -64,7 +64,7 @@ class Http
             ap args if args
         end
 
-        response = if should_return_mock? url
+        response = if should_return_fake? url
             make_response url
         else
             yield
@@ -93,7 +93,7 @@ class Http
         self.class.put url, body: args, headers: headers
     end
 
-    def should_return_mock? url
+    def should_return_fake? url
         case @network_mode
         when :default
             @responses.key? url
