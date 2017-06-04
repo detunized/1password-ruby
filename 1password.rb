@@ -466,7 +466,7 @@ class Srp
     end
 
     def compute_a
-        @secret_a = Util.bn_from_bytes "\0" * 32 # TODO: Make it random
+        @secret_a = Util.bn_from_bytes Crypto.random 32
         @shared_a = SIRP_g.mod_exp @secret_a, SIRP_N
     end
 
@@ -656,7 +656,6 @@ class OnePassword
     # Crypto
     #
 
-    # TODO: Remove account_info parameter
     def decrypt_keysets keysets, client_info
         sorted = keysets.sort_by { |i| i["sn"] }.reverse
 
@@ -797,7 +796,7 @@ class OnePassword
         }
 
         payload = JSON.dump({"sessionID" => @session.id})
-        encrypted_payload = session_key.encrypt payload, "\0" * 12 # TODO: Generate random
+        encrypted_payload = session_key.encrypt payload, Crypto.random(12)
         response = post_json ["auth", "verify"], encrypted_payload, mock_response
 
         # Just to verify that it's a valid JSON and it has some keys.
