@@ -10,6 +10,9 @@ require "json/jwt"
 
 # TODO: Move out all the mock responses to a separate file
 
+DEBUG_DISABLE_RANDOM = true
+DEBUG_NETWORK_LOG = true
+
 #
 # Network
 #
@@ -23,7 +26,6 @@ class Http
     #  - :force_offline: never go online and return mock even if it's nil
     def initialize network_mode = :default
         @network_mode = network_mode
-        @log = true
         @json_headers = {
             "Content-Type" => "application/json; charset=UTF-8"
         }
@@ -36,7 +38,7 @@ class Http
     end
 
     def post url, args = {}, headers = {}, mock_response = nil
-        make_request "POST", url do
+        make_request "POST", url, args do
             post_raw url,
                      args.to_json,
                      headers.merge(@json_headers),
@@ -45,7 +47,7 @@ class Http
     end
 
     def put url, args = {}, headers = {}, mock_response = nil
-        make_request "PUT", url do
+        make_request "PUT", url, args do
             put_raw url,
                     args.to_json,
                     headers.merge(@json_headers),
@@ -58,15 +60,16 @@ class Http
     #
 
     # Log and make the request
-    def make_request method, url
-        if @log
+    def make_request method, url, args = nil
+        if DEBUG_NETWORK_LOG
             puts "=" * 80
             puts "#{method} to #{url}"
+            ap args if args
         end
 
         response = yield
 
-        if @log
+        if DEBUG_NETWORK_LOG
             puts "-" * 40
             puts "HTTP: #{response.code}"
             ap response.parsed_response
@@ -179,7 +182,11 @@ end
 
 module Crypto
     def self.random size
-        SecureRandom.random_bytes size
+        if DEBUG_DISABLE_RANDOM
+            "\0" * size
+        else
+            SecureRandom.random_bytes size
+        end
     end
 
     BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
