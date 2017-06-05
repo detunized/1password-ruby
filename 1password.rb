@@ -8,8 +8,8 @@ require "securerandom"
 require "httparty"
 require "json/jwt"
 
-DEBUG_DISABLE_RANDOM = true
-DEBUG_NETWORK_LOG = true
+DEBUG_DISABLE_RANDOM = false
+DEBUG_NETWORK_LOG = false
 
 #
 # Network
@@ -897,7 +897,7 @@ end
 #
 
 # Set up and prepare the credentials
-http = Http.new :force_offline
+http = Http.new :force_online
 config = YAML::load_file "config.yaml"
 client_info = ClientInfo.new username: config["username"],
                              password: config["password"],
