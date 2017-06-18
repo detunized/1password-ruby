@@ -2,8 +2,9 @@
 
 # Copyright (C) 2017 Dmitry Yakimenko (detunized@gmail.com).
 # Licensed under the terms of the MIT license. See LICENCE for details.
+
+require "openssl"
 require "hkdf"
-require "pbkdf256"
 require "securerandom"
 require "httparty"
 require "json/jwt"
@@ -226,10 +227,9 @@ module Crypto
     end
 
     def self.pbes2 algorithm, password, salt, iterations
-        # TODO: PBKDF2 doesn't work anymore, PBKDF256 supports only sha256
         hashes = {
-            "PBES2-HS512" => nil,
-            "PBES2g-HS512" => nil,
+            "PBES2-HS512" => "sha512",
+            "PBES2g-HS512" => "sha512",
             "PBES2-HS256" => "sha256",
             "PBES2g-HS256" => "sha256",
         }
@@ -237,7 +237,7 @@ module Crypto
         hash = hashes[algorithm]
         raise "Unsupported algorithm '#{algorithm}'" if hash.nil?
 
-        PBKDF256.dk password, salt, iterations, 32
+        OpenSSL::PKCS5.pbkdf2_hmac(password, salt, iterations, 32, hash)
     end
 
     # Notes on the encryption

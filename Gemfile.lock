@@ -22,7 +22,6 @@ GEM
     minitest (5.10.2)
     multi_json (1.12.1)
     multi_xml (0.5.5)
-    pbkdf256 (0.1.3)
     securecompare (1.0.0)
     thread_safe (0.3.6)
     tzinfo (1.2.3)
@@ -37,7 +36,6 @@ DEPENDENCIES
   hkdf
   httparty
   json-jwt
-  pbkdf256
 
 BUNDLED WITH
    1.12.5
