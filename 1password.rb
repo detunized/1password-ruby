@@ -115,6 +115,8 @@ class Http
             url_responses.last
         end
 
+        raise "Response for #{url} is not found" if response.nil?
+
         @seen_urls[url] += 1
 
         @response_class ||= Struct.new :parsed_response, :code, :success?
